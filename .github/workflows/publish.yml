@@ -1,0 +1,87 @@
+name: Publish Atlas
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Verified geography-game source commit
+        required: true
+        type: string
+      verification_run:
+        description: Successful geography-game verification run
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: atlas-pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERIFICATION_RUN: ${{ inputs.verification_run }}
+      BASE_URL: /atlas/
+      GLOBE_BASE_URL: /atlas/
+      VITE_ATLAS_BUILD: ${{ inputs.source_sha }}
+      PLAYWRIGHT_CHANNEL: chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: kmarchais/geography-game
+          ref: ${{ inputs.source_sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Require verified source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run view "$VERIFICATION_RUN" --repo kmarchais/geography-game --json headSha,jobs > source-verification.json
+          node --input-type=module -e "import fs from 'node:fs';import assert from 'node:assert/strict';assert.match(process.env.SOURCE_SHA,/^[0-9a-f]{40}$/);const r=JSON.parse(fs.readFileSync('source-verification.json'));assert.equal(r.headSha,process.env.SOURCE_SHA);for(const name of ['build','hosting','android'])assert.equal(r.jobs.find(j=>j.name===name)?.conclusion,'success',name);"
+      - run: bun install --frozen-lockfile
+      - name: Build and test the atlas path with an isolated API
+        env:
+          VITE_ATLAS_API_URL: /atlas-api
+        run: |
+          bun run build-only
+          bunx playwright test --config playwright.globe.config.ts --project desktop --project android --grep 'minimal start|Google entry|guest avatar'
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-path-browser-report
+          path: playwright-report/globe/
+      - name: Build the public site against Cloudflare
+        env:
+          VITE_ATLAS_API_URL: ${{ vars.ATLAS_API_URL }}
+        run: |
+          node --input-type=module -e "if(new URL(process.env.VITE_ATLAS_API_URL).protocol!=='https:')throw Error('HTTPS API required')"
+          bun run build-only
+          cp dist/index.html dist/404.html
+          git rev-parse HEAD > atlas-source-commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas-pages-source-proof
+          path: |
+            atlas-source-commit.txt
+            source-verification.json
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deploy
