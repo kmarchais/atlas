@@ -46,9 +46,10 @@ jobs:
           assert.match(process.env.VERIFICATION_RUN,/^[0-9]+$/)
           const path='https://api.github.com/repos/kmarchais/geography-game/actions/runs/'+process.env.VERIFICATION_RUN
           const get=async url=>{const r=await fetch(url,{headers:{Accept:'application/vnd.github+json'}});assert.equal(r.status,200);return r.json()}
-          const [run,jobs]=await Promise.all([get(path),get(path+'/jobs')])
+          const [run,jobs]=await Promise.all([get(path),get(path+'/jobs?filter=all&per_page=100')])
           assert.equal(run.head_sha,process.env.SOURCE_SHA)
-          for(const name of ['build','hosting','android'])assert.equal(jobs.jobs.find(j=>j.name===name)?.conclusion,'success',name)
+          assert(jobs.total_count<=100,'Too many attempts to verify in one response')
+          for(const name of ['build','hosting','android'])assert.equal(jobs.jobs.filter(j=>j.name===name).sort((a,b)=>b.id-a.id)[0]?.conclusion,'success',name)
           fs.writeFileSync('source-verification.json',JSON.stringify({sourceCommit:run.head_sha,verificationRun:run.id,jobs:jobs.jobs.map(({name,conclusion})=>({name,conclusion}))},null,2))
           NODE
       - run: bun install --frozen-lockfile
