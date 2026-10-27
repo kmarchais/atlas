@@ -38,18 +38,26 @@ jobs:
         with:
           node-version: '24'
       - name: Require verified source
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh run view "$VERIFICATION_RUN" --repo kmarchais/geography-game --json headSha,jobs > source-verification.json
-          node --input-type=module -e "import fs from 'node:fs';import assert from 'node:assert/strict';assert.match(process.env.SOURCE_SHA,/^[0-9a-f]{40}$/);const r=JSON.parse(fs.readFileSync('source-verification.json'));assert.equal(r.headSha,process.env.SOURCE_SHA);for(const name of ['build','hosting','android'])assert.equal(r.jobs.find(j=>j.name===name)?.conclusion,'success',name);"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          import assert from 'node:assert/strict'
+          assert.match(process.env.SOURCE_SHA,/^[0-9a-f]{40}$/)
+          assert.match(process.env.VERIFICATION_RUN,/^[0-9]+$/)
+          const path='https://api.github.com/repos/kmarchais/geography-game/actions/runs/'+process.env.VERIFICATION_RUN
+          const get=async url=>{const r=await fetch(url,{headers:{Accept:'application/vnd.github+json'}});assert.equal(r.status,200);return r.json()}
+          const [run,jobs]=await Promise.all([get(path),get(path+'/jobs')])
+          assert.equal(run.head_sha,process.env.SOURCE_SHA)
+          for(const name of ['build','hosting','android'])assert.equal(jobs.jobs.find(j=>j.name===name)?.conclusion,'success',name)
+          fs.writeFileSync('source-verification.json',JSON.stringify({sourceCommit:run.head_sha,verificationRun:run.id,jobs:jobs.jobs.map(({name,conclusion})=>({name,conclusion}))},null,2))
+          NODE
       - run: bun install --frozen-lockfile
       - name: Build and test the atlas path with an isolated API
         env:
           VITE_ATLAS_API_URL: /atlas-api
         run: |
           bun run build-only
-          bunx playwright test --config playwright.globe.config.ts --project desktop --project android --grep 'minimal start|Google entry|guest avatar'
+          bunx playwright test --config playwright.globe.config.ts --project desktop --project android --grep 'minimal start|Google entry|guest avatar|installs Atlas offline'
       - name: Retain browser evidence
         if: always()
         uses: actions/upload-artifact@v4
